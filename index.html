@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGPU particle benchmark</title>
+<pre id="log">loading</pre>
+<script type="module">
+  import { runBench, COUNTS } from './bench.mjs';
+  const logEl = document.getElementById('log');
+  const log = (m) => { logEl.textContent += '\n' + m; };
+  const q = new URLSearchParams(location.search);
+  window.runBench = (opts = {}) => runBench({ log, ...opts });
+  if (q.has('run')) {
+    const counts = q.get('counts') ? q.get('counts').split(',').map(Number) : COUNTS;
+    window.__done = false;
+    window.runBench({ counts })
+      .then((r) => { window.__result = r; window.__done = true; log('done'); })
+      .catch((e) => { window.__error = String(e && e.stack || e); window.__done = true; log('error ' + window.__error); });
+  } else {
+    logEl.textContent = 'open with ?run=1 to start';
+  }
+</script>

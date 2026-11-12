@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>charts</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; background: #fff; font-family: -apple-system, 'Hiragino Sans', sans-serif; color: #222; }
+  svg { display: block; background: #fff; }
+</style>
+<div id="c1" style="width:960px"></div>
+<div id="c2" style="width:960px"></div>
+<script type="module">
+  const data = await (await fetch('results.json')).json();
+  const COLORS = { js: '#D55E00', wasm: '#0072B2', gpu: '#009E73' };
+  const NAMES = { js: 'JS', wasm: 'WASM', gpu: 'WebGPU' };
+  const W = 960, H = 520, M = { l: 80, r: 24, t: 56, b: 64 };
+
+  function chart({ id, title, subtitle, series, yLabel }) {
+    const xs = data.cells.map((c) => c.n);
+    const all = series.flatMap((s) => s.points.flatMap((p) => [p.y, p.y2].filter((v) => v > 0)));
+    const ymin = 10 ** Math.floor(Math.log10(Math.min(...all)));
+    const ymax = 10 ** Math.ceil(Math.log10(Math.max(...all)));
+    const x = (n) => M.l + ((Math.log10(n) - Math.log10(xs[0])) / (Math.log10(xs.at(-1)) - Math.log10(xs[0]))) * (W - M.l - M.r);
+    const y = (v) => H - M.b - ((Math.log10(v) - Math.log10(ymin)) / (Math.log10(ymax) - Math.log10(ymin))) * (H - M.t - M.b);
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-size="14">`;
+    s += `<text x="${M.l}" y="26" font-size="18" font-weight="700">${title}</text>`;
+    s += `<text x="${M.l}" y="46" fill="#555">${subtitle}</text>`;
+    for (let e = Math.log10(ymin); e <= Math.log10(ymax); e++) {
+      const v = 10 ** e;
+      s += `<line x1="${M.l}" x2="${W - M.r}" y1="${y(v)}" y2="${y(v)}" stroke="#ddd"/>`;
+      s += `<text x="${M.l - 8}" y="${y(v) + 5}" text-anchor="end" fill="#555">${v >= 1 ? v : v}</text>`;
+    }
+    for (const n of xs) {
+      if (Math.log10(n) % 1 === 0 || Math.abs((Math.log10(n) % 1) - 0.5) < 0.01) {
+        const major = Math.log10(n) % 1 === 0;
+        s += `<line x1="${x(n)}" x2="${x(n)}" y1="${M.t}" y2="${H - M.b}" stroke="${major ? '#ddd' : '#f0f0f0'}"/>`;
+        if (major) s += `<text x="${x(n)}" y="${H - M.b + 22}" text-anchor="middle" fill="#555">${n >= 1000 ? (n >= 1e6 ? n / 1e6 + 'M' : n / 1000 + 'k') : n}</text>`;
+      }
+    }
+    s += `<text x="${(M.l + W - M.r) / 2}" y="${H - 16}" text-anchor="middle" fill="#333">粒子数（対数軸）</text>`;
+    s += `<text transform="translate(18 ${(M.t + H - M.b) / 2}) rotate(-90)" text-anchor="middle" fill="#333">${yLabel}</text>`;
+    series.forEach((ser, i) => {
+      const color = COLORS[ser.key];
+      const line = (acc, dash) => `<polyline fill="none" stroke="${color}" stroke-width="${dash ? 1.5 : 2.5}" ${dash ? 'stroke-dasharray="6 4" opacity="0.8"' : ''} points="${ser.points.map((p) => `${x(p.n)},${y(p[acc])}`).join(' ')}"/>`;
+      s += line('y', false);
+      if (ser.points[0].y2 !== undefined) s += line('y2', true);
+      for (const p of ser.points) s += `<circle cx="${x(p.n)}" cy="${y(p.y)}" r="3.5" fill="${color}"/>`;
+      const lx = M.l + 16, ly = M.t + 10 + i * 22;
+      s += `<line x1="${lx}" x2="${lx + 28}" y1="${ly}" y2="${ly}" stroke="${color}" stroke-width="2.5"/><text x="${lx + 36}" y="${ly + 5}">${ser.name}</text>`;
+    });
+    s += `</svg>`;
+    document.getElementById(id).innerHTML = s;
+  }
+
+  const pts = (key, pick) => data.cells.map((c) => ({ n: c.n, ...pick(c[key]) }));
+
+  chart({
+    id: 'c1',
+    title: '描画つきの 1 フレームの時間（実線 p50、点線 p99）',
+    subtitle: 'シミュレーション 1 ステップ + 描画。CPU 側は GPU への転送を含む。値が小さいほど速い',
+    yLabel: 'フレーム時間 (ms)',
+    series: ['js', 'wasm', 'gpu'].map((k) => ({ key: k, name: NAMES[k], points: pts(k, (r) => ({ y: r.frame.p50, y2: r.frame.p99 })) })),
+  });
+
+  chart({
+    id: 'c2',
+    title: '結果を CPU のメモリで使う場合の 1 ステップの時間（p50）',
+    subtitle: '描画なし。GPU は計算 + 位置の読み戻し、CPU はステップ単体。タイマー分解能 5 µs 未満は 5 µs として表示',
+    yLabel: 'ステップ時間 (ms)',
+    series: [
+      { key: 'js', name: 'JS（ステップのみ）', points: pts('js', (r) => ({ y: Math.max(r.cpuStep.p50, 0.005) })) },
+      { key: 'wasm', name: 'WASM（ステップのみ）', points: pts('wasm', (r) => ({ y: Math.max(r.cpuStep.p50, 0.005) })) },
+      { key: 'gpu', name: 'WebGPU（計算+読み戻し）', points: pts('gpu', (r) => ({ y: r.computeReadbackFrame.p50 })) },
+    ],
+  });
+  window.__ready = true;
+</script>
